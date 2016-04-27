@@ -1,5 +1,10 @@
-PG_CPPFLAGS += -std=c11 -I/usr/local/include
-SHLIB_LINK  += -L/usr/local/lib -lrdkafka -lz -lpthread
+RDKAFKA_CFLAGS = $(shell pkg-config --cflags rdkafka)
+RDKAFKA_LIBS = $(shell pkg-config --libs rdkafka)
+ZLIB_CFLAGS = $(shell pkg-config --cflags zlib)
+ZLIB_LIBS = $(shell pkg-config --libs zlib)
+
+PG_CPPFLAGS += -std=c11 $(RDKAFKA_CFLAGS) $(ZLIB_CFLAGS)
+SHLIB_LINK  += $(RDKAFKA_LIBS) $(ZLIB_LIBS) -lpthread
 
 EXTENSION    = kafka
 EXTVERSION   = $(shell grep default_version $(EXTENSION).control | \
