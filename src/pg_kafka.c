@@ -84,6 +84,11 @@ static rd_kafka_t *get_rk() {
     brokers = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
   }
 
+  if (!brokers) {
+    elog(ERROR, "no brokers available");
+    return NULL;
+  }
+
   /* get producer handle to kafka */
   rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
   SPI_finish();
@@ -112,7 +117,9 @@ err:
 
 static void rk_destroy() {
   rd_kafka_t *rk = get_rk();
-  rd_kafka_destroy(rk);
+  if (rk) {
+    rd_kafka_destroy(rk);
+  }
   GRK = NULL;
 }
 
@@ -130,59 +137,86 @@ static void pg_xact_callback(XactEvent event, void *arg) {
   }
 }
 
+static Datum produce(char *topic, char *key, char *msg, size_t len) {
+  rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
+  rd_kafka_t *rk = get_rk();
+  rd_kafka_topic_t *rkt;
+  int partition, rc;
+  int tries = 5;
+  size_t key_len = 0;
+
+  if (!rk) {
+    PG_RETURN_BOOL(0);
+  }
+
+  if (key) {
+    key_len = strlen(key);
+  }
+
+  rkt = rd_kafka_topic_new(rk, topic, topic_conf);
+
+  /* using random partition for now */
+  partition = RD_KAFKA_PARTITION_UA;
+
+  /* send/produce message. */
+  rc = rd_kafka_produce(rkt, partition, RD_KAFKA_MSG_F_COPY, msg, len,
+                        key, key_len, NULL);
+  if (rc == -1) {
+    elog(ERROR, "failed to produce to topic-partition: %s-%i: %s",
+         rd_kafka_topic_name(rkt), partition, rd_kafka_err2str(rd_kafka_errno2err(errno)));
+  }
+
+  /* Poll to handle delivery reports */
+  rd_kafka_poll(rk, 0);
+
+  /* Wait for messages to be delivered */
+  while (rd_kafka_outq_len(rk) > 0 && tries-- > 0) {
+    rd_kafka_poll(rk, 1000);
+  }
+
+  /* destroy kafka topic */
+  rd_kafka_topic_destroy(rkt);
+
+  PG_RETURN_BOOL(1);
+}
+
 void _PG_init() {
   RegisterXactCallback(pg_xact_callback, NULL);
 }
 
 PG_FUNCTION_INFO_V1(pg_kafka_produce);
 Datum pg_kafka_produce(PG_FUNCTION_ARGS) {
-  if (!PG_ARGISNULL(0) && !PG_ARGISNULL(1)) {
-    /* get topic arg */
-    text *topic_txt = PG_GETARG_TEXT_PP(0);
-    char *topic = text_to_cstring(topic_txt);
-    /* get msg arg */
-    text *msg_txt = PG_GETARG_TEXT_PP(1);
-    void *msg = VARDATA_ANY(msg_txt);
-    size_t msg_len = VARSIZE_ANY_EXHDR(msg_txt);
-    /* create topic */
-    rd_kafka_topic_conf_t *topic_conf = rd_kafka_topic_conf_new();
-    rd_kafka_t *rk = get_rk();
-    rd_kafka_topic_t *rkt;
-    int partition, rv;
-    int tries = 5;
-
-    if (!rk) {
-      PG_RETURN_BOOL(0);
-    }
-
-    rkt = rd_kafka_topic_new(rk, topic, topic_conf);
-
-    /* using random partition for now */
-    partition = RD_KAFKA_PARTITION_UA;
-
-    /* send/produce message. */
-    rv = rd_kafka_produce(rkt, partition, RD_KAFKA_MSG_F_COPY, msg, msg_len,
-                          NULL, 0, NULL);
-    if (rv == -1) {
-      elog(ERROR, "failed to produce to topic-partition: %s-%i: %s",
-           rd_kafka_topic_name(rkt), partition, rd_kafka_err2str(rd_kafka_errno2err(errno)));
-    }
-
-    /* Poll to handle delivery reports */
-    rd_kafka_poll(rk, 0);
-
-    /* Wait for messages to be delivered */
-    while (rd_kafka_outq_len(rk) > 0 && tries-- > 0) {
-      rd_kafka_poll(rk, 1000);
-    }
-
-    /* destroy kafka topic */
-    rd_kafka_topic_destroy(rkt);
-    pfree(topic);
-
-    PG_RETURN_BOOL(rv == 0);
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1)) {
+    PG_RETURN_BOOL(0);
   }
-  PG_RETURN_BOOL(0);
+  /* get topic arg */
+  text *topic_txt = PG_GETARG_TEXT_PP(0);
+  char *topic = text_to_cstring(topic_txt);
+  /* get msg arg */
+  text *msg_txt = PG_GETARG_TEXT_PP(1);
+  void *msg = VARDATA_ANY(msg_txt);
+  size_t msg_len = VARSIZE_ANY_EXHDR(msg_txt);
+  Datum ret = produce(topic, NULL, msg, msg_len);
+  pfree(topic);
+  return ret;
+}
+
+PG_FUNCTION_INFO_V1(pg_kafka_produce_keyed_message);
+Datum pg_kafka_produce_keyed_message(PG_FUNCTION_ARGS) {
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2)) {
+    PG_RETURN_BOOL(0);
+  }
+  text *topic_txt = PG_GETARG_TEXT_PP(0);
+  char *topic = text_to_cstring(topic_txt);
+  text *key_txt = PG_GETARG_TEXT_PP(1);
+  char *key = text_to_cstring(key_txt);
+  text *msg_txt = PG_GETARG_TEXT_PP(2);
+  void *msg = VARDATA_ANY(msg_txt);
+  size_t msg_len = VARSIZE_ANY_EXHDR(msg_txt);
+  Datum ret = produce(topic, key, msg, msg_len);
+  pfree(topic);
+  pfree(key);
+  return ret;
 }
 
 PG_FUNCTION_INFO_V1(pg_kafka_close);

@@ -6,11 +6,14 @@ returns boolean as 'pg_kafka.so', 'pg_kafka_produce'
 language C immutable;
 
 comment on function kafka.produce(varchar, varchar) is
-'Produces a message (topic, message).  The message will only
-be produced if the containing PostgreSQL transaction successfully commits.
+'Produces a message (topic, message).';
 
-Produce returns a boolean indicating if the message was sent successfully.  Note that as
-Kafka produce is asynchronous, you may find out later it was unsuccessful.';
+create function kafka.produce(varchar, varchar, varchar)
+returns boolean as 'pg_kafka.so', 'pg_kafka_produce_keyed_message'
+language C immutable;
+
+comment on function kafka.produce(varchar, varchar, varchar) is
+'Produces a message (topic, key, message).';
 
 create function kafka.close() 
 returns boolean as 'pg_kafka.so', 'pg_kafka_close'
