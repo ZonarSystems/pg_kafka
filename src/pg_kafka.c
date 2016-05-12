@@ -130,8 +130,6 @@ static void pg_xact_callback(XactEvent event, void *arg) {
     break;
   case XACT_EVENT_COMMIT:
   case XACT_EVENT_PREPARE:
-  case XACT_EVENT_PRE_COMMIT:		
-  case XACT_EVENT_PRE_PREPARE:
   default:
     break;
   }
